@@ -3,6 +3,8 @@ Azure Document Intelligence processor for extracting data from documents
 """
 
 import io
+import os
+import tempfile
 from typing import Dict, List, Tuple, Any, Optional
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeResult
@@ -10,6 +12,58 @@ from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 from azure.core.credentials import AzureKeyCredential
 import streamlit as st
 from config import DOCUMENT_MODELS, CONFIDENCE_THRESHOLDS
+from datetime import datetime, timedelta
+from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+import uuid
+
+
+def azure_upload_file_and_get_sas_url(file_path, blob_name, expiry_date: timedelta = timedelta(hours=1)):
+    """
+    Uploads a file to Azure Blob Storage and generates a temporary SAS URL.
+
+    :param expiry_date: Expiry date for the SAS url
+    :param file_path: Path to the local file to be uploaded.
+    :param blob_name: Name for the blob in Azure Storage.
+
+    :return: SAS URL string for the uploaded blob.
+    """
+    try:
+        container_name = os.getenv('AZURE_CONTAINER_NAME')
+        account_name = os.getenv('AZURE_ACCOUNT_NAME')
+        account_key = os.getenv('AZURE_ACCOUNT_KEY')
+
+        # Construct the BlobServiceClient using the account URL and account key
+        account_url = f"https://{account_name}.blob.core.windows.net"
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=account_key)
+
+        # Get the container client
+        container_client = blob_service_client.get_container_client(container_name)
+
+        # Upload the file
+        with open(file_path, "rb") as data:
+            blob_client = container_client.upload_blob(name=blob_name, data=data, overwrite=True)
+
+        # Set the SAS token expiration time (e.g., 1 hour from now)
+        sas_expiry = datetime.now() + expiry_date
+
+        # Generate the SAS token with read permissions
+        sas_token = generate_blob_sas(
+            account_name=account_name,
+            container_name=container_name,
+            blob_name=blob_name,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=sas_expiry
+        )
+
+        # Construct the full URL with the SAS token
+        sas_url = f"{account_url}/{container_name}/{blob_name}?{sas_token}"
+        return sas_url
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
 
 
 class DocumentProcessor:
@@ -37,18 +91,47 @@ class DocumentProcessor:
             if not model_id:
                 raise ValueError(f"Unknown model type: {model_type}")
 
-            passportUrl = "https://tflowpoc.blob.core.windows.net/ocr-demo/passport_sample.jpg?sv=2023-01-03&st=2025-07-21T03%3A35%3A52Z&se=2026-07-22T03%3A35%3A00Z&sr=b&sp=r&sig=li5MUnFwAo4VVyWVEcid2Crhlh%2FskaEWA1UU5k5aWj8%3D"
-            bankstatUrl = "https://tflowpoc.blob.core.windows.net/ocr-demo/bankstatement_sample.pdf?sv=2023-01-03&st=2025-07-21T04%3A13%3A48Z&se=2026-07-22T04%3A13%3A00Z&sr=b&sp=r&sig=YvvyGJpK5MagTHCjeohQ2g1GlgyXBgXcShPwkZAOCBc%3D"
-            # Begin analysis - pass document bytes directly
-            poller = self.client.begin_analyze_document(
-                model_id=model_id,
-                body=AnalyzeDocumentRequest(url_source=passportUrl),
-                locale="en-US"
-            )
-            result = poller.result()
+            # Create a temporary file to upload
+            temp_file_path = None
+            sas_url = None
             
-            # Convert to dictionary for processing
-            return self._process_analysis_result(result, model_type)
+            try:
+                # Generate a unique blob name
+                blob_name = f"temp_document_{uuid.uuid4().hex}_{int(datetime.now().timestamp())}"
+                
+                # Create temporary file from bytes
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as temp_file:
+                    temp_file.write(file_bytes)
+                    temp_file_path = temp_file.name
+                
+                # Upload to Azure Blob Storage and get SAS URL
+                sas_url = azure_upload_file_and_get_sas_url(
+                    file_path=temp_file_path,
+                    blob_name=blob_name,
+                    expiry_date=timedelta(hours=2)  # Give enough time for processing
+                )
+                
+                if not sas_url:
+                    raise Exception("Failed to upload file to Azure Blob Storage")
+                
+                # Begin analysis using the SAS URL
+                poller = self.client.begin_analyze_document(
+                    model_id=model_id,
+                    body=AnalyzeDocumentRequest(url_source=sas_url),
+                    locale="en-US"
+                )
+                result = poller.result()
+                
+                # Convert to dictionary for processing
+                return self._process_analysis_result(result, model_type)
+                
+            finally:
+                # Clean up temporary file
+                if temp_file_path and os.path.exists(temp_file_path):
+                    try:
+                        os.unlink(temp_file_path)
+                    except Exception as cleanup_error:
+                        print(f"Warning: Could not delete temporary file {temp_file_path}: {cleanup_error}")
             
         except Exception as e:
             st.error(f"Error analyzing document: {str(e)}")
