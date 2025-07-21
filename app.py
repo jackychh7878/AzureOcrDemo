@@ -173,7 +173,7 @@ def display_results(extracted_data, file_bytes):
         
         # Draw annotations
         annotated_image = visualizer.draw_annotations(file_bytes, extracted_data, selected_fields)
-        st.image(annotated_image, caption="Document with Extracted Fields", use_column_width=True)
+        st.image(annotated_image, caption="Document with Extracted Fields", use_container_width=True)
         
         # Display legend
         st.markdown(visualizer.create_legend(), unsafe_allow_html=True)

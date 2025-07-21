@@ -5,6 +5,8 @@ Azure Document Intelligence processor for extracting data from documents
 import io
 from typing import Dict, List, Tuple, Any, Optional
 from azure.ai.documentintelligence import DocumentIntelligenceClient
+from azure.ai.documentintelligence.models import AnalyzeResult
+from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 from azure.core.credentials import AzureKeyCredential
 import streamlit as st
 from config import DOCUMENT_MODELS, CONFIDENCE_THRESHOLDS
@@ -34,11 +36,12 @@ class DocumentProcessor:
             model_id = DOCUMENT_MODELS.get(model_type)
             if not model_id:
                 raise ValueError(f"Unknown model type: {model_type}")
-            
+
             # Begin analysis - pass document bytes directly
             poller = self.client.begin_analyze_document(
                 model_id=model_id,
-                document=file_bytes
+                analyze_request=file_bytes,
+                content_type="application/octet-stream"
             )
             result = poller.result()
             
@@ -57,7 +60,9 @@ class DocumentProcessor:
             'pages': [],
             'documents': [],
             'tables': [],
-            'key_value_pairs': []
+            'key_value_pairs': [],
+            'fields': [],  # Add fields at top level for display
+            'confidence_stats': {'high': 0, 'medium': 0, 'low': 0}  # Add confidence stats
         }
         
         # Process pages
@@ -77,7 +82,7 @@ class DocumentProcessor:
                     for line in page.lines:
                         line_info = {
                             'content': line.content,
-                            'bounding_box': line.polygon if hasattr(line, 'polygon') else []
+                            'bounding_box': self._convert_polygon(line.polygon) if hasattr(line, 'polygon') else []
                         }
                         page_info['lines'].append(line_info)
                 
@@ -87,7 +92,7 @@ class DocumentProcessor:
                         word_info = {
                             'content': word.content,
                             'confidence': word.confidence,
-                            'bounding_box': word.polygon if hasattr(word, 'polygon') else []
+                            'bounding_box': self._convert_polygon(word.polygon) if hasattr(word, 'polygon') else []
                         }
                         page_info['words'].append(word_info)
                 
@@ -104,11 +109,33 @@ class DocumentProcessor:
                 
                 if hasattr(doc, 'fields') and doc.fields:
                     for field_name, field_value in doc.fields.items():
-                        if hasattr(field_value, 'content'):
+                        if field_value is not None:
+                            # Extract field information
+                            field_info = {
+                                'name': field_name,
+                                'value': self._extract_field_value(field_value),
+                                'confidence': getattr(field_value, 'confidence', 0.0),
+                                'type': getattr(field_value, 'type', 'string'),
+                                'polygon': self._extract_field_polygon(field_value),
+                                'page_number': 1  # Default to page 1
+                            }
+                            
+                            # Add to top-level fields for display
+                            processed_result['fields'].append(field_info)
+                            
+                            # Update confidence stats
+                            confidence = field_info['confidence']
+                            if confidence >= CONFIDENCE_THRESHOLDS['high']:
+                                processed_result['confidence_stats']['high'] += 1
+                            elif confidence >= CONFIDENCE_THRESHOLDS['medium']:
+                                processed_result['confidence_stats']['medium'] += 1
+                            else:
+                                processed_result['confidence_stats']['low'] += 1
+                            
                             doc_info['fields'][field_name] = {
-                                'content': field_value.content,
-                                'confidence': field_value.confidence,
-                                'value': field_value.value if hasattr(field_value, 'value') else field_value.content
+                                'content': field_info['value'],
+                                'confidence': confidence,
+                                'value': field_info['value']
                             }
                 
                 processed_result['documents'].append(doc_info)
@@ -119,7 +146,8 @@ class DocumentProcessor:
                 table_info = {
                     'row_count': table.row_count,
                     'column_count': table.column_count,
-                    'cells': []
+                    'cells': [],
+                    'polygon': self._convert_polygon(table.bounding_regions[0].polygon) if hasattr(table, 'bounding_regions') and table.bounding_regions else []
                 }
                 
                 if hasattr(table, 'cells') and table.cells:
@@ -128,8 +156,10 @@ class DocumentProcessor:
                             'content': cell.content,
                             'row_index': cell.row_index,
                             'column_index': cell.column_index,
-                            'row_span': cell.row_span if hasattr(cell, 'row_span') else 1,
-                            'column_span': cell.column_span if hasattr(cell, 'column_span') else 1
+                            'row_span': getattr(cell, 'row_span', 1),
+                            'column_span': getattr(cell, 'column_span', 1),
+                            'polygon': self._convert_polygon(cell.bounding_regions[0].polygon) if hasattr(cell, 'bounding_regions') and cell.bounding_regions else [],
+                            'confidence': getattr(cell, 'confidence', 0.0)
                         }
                         table_info['cells'].append(cell_info)
                 
@@ -147,6 +177,45 @@ class DocumentProcessor:
         
         return processed_result
     
+    def _extract_field_value(self, field_value) -> str:
+        """Extract the actual value from a field"""
+        if hasattr(field_value, 'value') and field_value.value is not None:
+            return str(field_value.value)
+        elif hasattr(field_value, 'content') and field_value.content is not None:
+            return str(field_value.content)
+        else:
+            return str(field_value) if field_value is not None else ''
+    
+    def _extract_field_polygon(self, field_value) -> List[Tuple[float, float]]:
+        """Extract polygon coordinates from a field"""
+        try:
+            if hasattr(field_value, 'bounding_regions') and field_value.bounding_regions:
+                polygon = field_value.bounding_regions[0].polygon
+                return self._convert_polygon(polygon)
+        except (AttributeError, IndexError):
+            pass
+        return []
+    
+    def _convert_polygon(self, polygon) -> List[Tuple[float, float]]:
+        """Convert polygon format to list of tuples"""
+        if not polygon:
+            return []
+        
+        try:
+            # Handle different polygon formats
+            if hasattr(polygon, '__iter__'):
+                coords = []
+                for point in polygon:
+                    if hasattr(point, 'x') and hasattr(point, 'y'):
+                        coords.append((point.x, point.y))
+                    elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                        coords.append((float(point[0]), float(point[1])))
+                return coords
+        except Exception:
+            pass
+        
+        return []
+    
     def extract_key_fields(self, analysis_result: Dict[str, Any]) -> Dict[str, Any]:
         """Extract key fields based on document type"""
         model_type = analysis_result.get('model_type', 'layout')
@@ -156,7 +225,7 @@ class DocumentProcessor:
             doc = analysis_result['documents'][0]
             fields = doc.get('fields', {})
             
-            if model_type == 'invoice':
+            if model_type == 'Invoice':
                 key_fields = {
                     'vendor_name': fields.get('VendorName', {}).get('content', ''),
                     'customer_name': fields.get('CustomerName', {}).get('content', ''),
@@ -164,14 +233,14 @@ class DocumentProcessor:
                     'invoice_total': fields.get('InvoiceTotal', {}).get('content', ''),
                     'due_date': fields.get('DueDate', {}).get('content', '')
                 }
-            elif model_type == 'receipt':
+            elif model_type == 'Receipt':
                 key_fields = {
                     'merchant_name': fields.get('MerchantName', {}).get('content', ''),
                     'transaction_date': fields.get('TransactionDate', {}).get('content', ''),
                     'total': fields.get('Total', {}).get('content', ''),
                     'subtotal': fields.get('Subtotal', {}).get('content', '')
                 }
-            elif model_type == 'identity':
+            elif model_type == 'ID Card':
                 key_fields = {
                     'first_name': fields.get('FirstName', {}).get('content', ''),
                     'last_name': fields.get('LastName', {}).get('content', ''),
