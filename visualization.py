@@ -174,28 +174,24 @@ class DocumentVisualizer:
         label_text = field_name
         confidence_text = f"{confidence:.1%}"
         
-        # Position label
+        # Position label closer to the annotation box
         label_x = max(0, min_x)
-        label_y = max(0, min_y - 30)
+        label_y = max(0, min_y - 15)  # Reduced from -30 to -12 for closer positioning
         
         # If label would be off-screen, place it below
         if label_y < 0:
-            label_y = min(img_height - 30, max_y + 5)
+            label_y = min(img_height - 15, max_y + 2)  # Reduced offsets for tighter positioning
         
         # Draw simple but visible label
         try:
-            # Draw background rectangle for label
-            label_bg = [label_x, label_y, label_x + 200, label_y + 25]
-            draw.rectangle(label_bg, fill=color, outline=color)
-            
-            # Draw text
+            # Draw text directly without background rectangle
             label_full = f"{field_name} ({confidence_text})"
-            draw.text((label_x + 5, label_y + 5), label_full, fill="white")
+            draw.text((label_x + 2, label_y + 2), label_full, fill=color)
             print(f"DEBUG: Successfully drew label for '{field_name}'")
             
         except Exception as e:
             print(f"DEBUG: Error drawing label: {e}")
-            # Try simple text without background
+            # Try simple text fallback
             try:
                 draw.text((label_x, label_y), field_name, fill=color)
             except:
