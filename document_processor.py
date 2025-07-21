@@ -37,11 +37,12 @@ class DocumentProcessor:
             if not model_id:
                 raise ValueError(f"Unknown model type: {model_type}")
 
-            receiptUrl = "https://tflowpoc.blob.core.windows.net/ocr-demo/passport_sample.jpg?sv=2023-01-03&st=2025-07-21T03%3A35%3A52Z&se=2026-07-22T03%3A35%3A00Z&sr=b&sp=r&sig=li5MUnFwAo4VVyWVEcid2Crhlh%2FskaEWA1UU5k5aWj8%3D"
+            passportUrl = "https://tflowpoc.blob.core.windows.net/ocr-demo/passport_sample.jpg?sv=2023-01-03&st=2025-07-21T03%3A35%3A52Z&se=2026-07-22T03%3A35%3A00Z&sr=b&sp=r&sig=li5MUnFwAo4VVyWVEcid2Crhlh%2FskaEWA1UU5k5aWj8%3D"
+            bankstatUrl = "https://tflowpoc.blob.core.windows.net/ocr-demo/bankstatement_sample.pdf?sv=2023-01-03&st=2025-07-21T04%3A13%3A48Z&se=2026-07-22T04%3A13%3A00Z&sr=b&sp=r&sig=YvvyGJpK5MagTHCjeohQ2g1GlgyXBgXcShPwkZAOCBc%3D"
             # Begin analysis - pass document bytes directly
             poller = self.client.begin_analyze_document(
                 model_id=model_id,
-                body=AnalyzeDocumentRequest(url_source=receiptUrl),
+                body=AnalyzeDocumentRequest(url_source=passportUrl),
                 locale="en-US"
             )
             result = poller.result()
