@@ -37,11 +37,12 @@ class DocumentProcessor:
             if not model_id:
                 raise ValueError(f"Unknown model type: {model_type}")
 
+            receiptUrl = "https://tflowpoc.blob.core.windows.net/ocr-demo/passport_sample.jpg?sv=2023-01-03&st=2025-07-21T03%3A35%3A52Z&se=2026-07-22T03%3A35%3A00Z&sr=b&sp=r&sig=li5MUnFwAo4VVyWVEcid2Crhlh%2FskaEWA1UU5k5aWj8%3D"
             # Begin analysis - pass document bytes directly
             poller = self.client.begin_analyze_document(
                 model_id=model_id,
-                analyze_request=file_bytes,
-                content_type="application/octet-stream"
+                body=AnalyzeDocumentRequest(url_source=receiptUrl),
+                locale="en-US"
             )
             result = poller.result()
             
