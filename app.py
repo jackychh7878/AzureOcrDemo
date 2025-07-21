@@ -5,12 +5,10 @@ Supports Invoice, Bank Statement, and ID Card analysis with visual annotations
 
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import io
 from config import DOCUMENT_MODELS, SUPPORTED_FILE_TYPES, AZURE_DOC_INTEL_ENDPOINT, AZURE_DOC_INTEL_KEY
 from document_processor import DocumentProcessor
-from visualization import DocumentVisualizer, create_confidence_chart
+from visualization import DocumentVisualizer
 
 
 def init_session_state():
@@ -165,7 +163,7 @@ def display_results(extracted_data, file_bytes):
             selected_fields = st.multiselect(
                 "Filter Fields to Display",
                 options=all_fields,
-                default=all_fields[:10],  # Show first 10 by default
+                default=all_fields,  # Show all by default
                 help="Select which fields to highlight on the document"
             )
         else:
@@ -181,32 +179,67 @@ def display_results(extracted_data, file_bytes):
     with col2:
         st.subheader("📊 Extracted Data")
         
-        # Confidence statistics
-        confidence_stats = extracted_data.get("confidence_stats", {"high": 0, "medium": 0, "low": 0})
-        chart_data = create_confidence_chart(confidence_stats)
+        # Display extracted fields in a format similar to the mockup
+        fields = extracted_data.get("fields", [])
         
-        fig = go.Figure(data=[go.Pie(
-            labels=chart_data['labels'],
-            values=chart_data['values'],
-            marker_colors=chart_data['colors'],
-            hole=0.4
-        )])
-        fig.update_layout(
-            title="Confidence Distribution",
-            height=300,
-            margin=dict(t=50, b=0, l=0, r=0)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Summary metrics
-        total_fields = sum(confidence_stats.values())
-        if total_fields > 0:
+        if fields:
+            # Create a container for the fields list
+            st.markdown("### Fields")
+            
+            # Sort fields by confidence (highest first)
+            sorted_fields = sorted(fields, key=lambda x: x.get('confidence', 0), reverse=True)
+            
+            # Display each field
+            for field in sorted_fields:
+                field_name = field.get("name", "Unknown")
+                field_value = field.get("value", "")
+                confidence = field.get("confidence", 0.0)
+                
+                # Create a container for each field
+                with st.container():
+                    # Color coding based on confidence
+                    if confidence >= 0.8:
+                        confidence_color = "#00FF00"  # Green for high confidence
+                        confidence_emoji = "🟢"
+                    elif confidence >= 0.5:
+                        confidence_color = "#FFA500"  # Orange for medium confidence
+                        confidence_emoji = "🟡"
+                    else:
+                        confidence_color = "#FF0000"  # Red for low confidence
+                        confidence_emoji = "🔴"
+                    
+                    # Display field info in a format similar to mockup
+                    st.markdown(f"""
+                    <div style="border: 1px solid #e0e0e0; border-radius: 5px; padding: 10px; margin: 5px 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong style="color: #333;">{field_name}</strong><br>
+                                <span style="color: #666; font-size: 0.9em;">{field_value}</span>
+                            </div>
+                            <div style="text-align: right;">
+                                <span style="color: {confidence_color}; font-weight: bold;">{confidence_emoji} {confidence:.1%}</span>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            # Summary statistics
+            st.markdown("### Summary")
+            total_fields = len(fields)
+            high_conf_count = sum(1 for f in fields if f.get('confidence', 0) >= 0.8)
+            medium_conf_count = sum(1 for f in fields if 0.5 <= f.get('confidence', 0) < 0.8)
+            low_conf_count = sum(1 for f in fields if f.get('confidence', 0) < 0.5)
+            
             col_a, col_b = st.columns(2)
             with col_a:
                 st.metric("Total Fields", total_fields)
+                st.metric("🟢 High Confidence", f"{high_conf_count} ({high_conf_count/total_fields*100:.0f}%)" if total_fields > 0 else "0")
             with col_b:
-                high_percentage = (confidence_stats["high"] / total_fields) * 100
-                st.metric("High Confidence", f"{high_percentage:.1f}%")
+                st.metric("🟡 Medium Confidence", f"{medium_conf_count} ({medium_conf_count/total_fields*100:.0f}%)" if total_fields > 0 else "0")
+                st.metric("🔴 Low Confidence", f"{low_conf_count} ({low_conf_count/total_fields*100:.0f}%)" if total_fields > 0 else "0")
+        
+        else:
+            st.info("No fields extracted from the document.")
 
 
 def display_detailed_results(extracted_data):

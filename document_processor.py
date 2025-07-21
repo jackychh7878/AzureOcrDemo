@@ -71,9 +71,9 @@ class DocumentProcessor:
             for page in result.pages:
                 page_info = {
                     'page_number': page.page_number,
-                    'width': page.width,
-                    'height': page.height,
-                    'unit': page.unit,
+                    'width': getattr(page, 'width', 8.5),  # Default letter size
+                    'height': getattr(page, 'height', 11.0),
+                    'unit': getattr(page, 'unit', 'inch'),
                     'lines': [],
                     'words': []
                 }
@@ -81,19 +81,27 @@ class DocumentProcessor:
                 # Extract lines
                 if hasattr(page, 'lines') and page.lines:
                     for line in page.lines:
+                        line_polygon = []
+                        if hasattr(line, 'polygon') and line.polygon:
+                            line_polygon = self._convert_polygon(line.polygon)
+                        
                         line_info = {
-                            'content': line.content,
-                            'bounding_box': self._convert_polygon(line.polygon) if hasattr(line, 'polygon') else []
+                            'content': getattr(line, 'content', ''),
+                            'bounding_box': line_polygon
                         }
                         page_info['lines'].append(line_info)
                 
                 # Extract words
                 if hasattr(page, 'words') and page.words:
                     for word in page.words:
+                        word_polygon = []
+                        if hasattr(word, 'polygon') and word.polygon:
+                            word_polygon = self._convert_polygon(word.polygon)
+                        
                         word_info = {
-                            'content': word.content,
-                            'confidence': word.confidence,
-                            'bounding_box': self._convert_polygon(word.polygon) if hasattr(word, 'polygon') else []
+                            'content': getattr(word, 'content', ''),
+                            'confidence': getattr(word, 'confidence', 0.0),
+                            'bounding_box': word_polygon
                         }
                         page_info['words'].append(word_info)
                 
@@ -191,8 +199,11 @@ class DocumentProcessor:
         """Extract polygon coordinates from a field"""
         try:
             if hasattr(field_value, 'bounding_regions') and field_value.bounding_regions:
-                polygon = field_value.bounding_regions[0].polygon
-                return self._convert_polygon(polygon)
+                for region in field_value.bounding_regions:
+                    if hasattr(region, 'polygon') and region.polygon:
+                        polygon = self._convert_polygon(region.polygon)
+                        if polygon:  # Return first valid polygon
+                            return polygon
         except (AttributeError, IndexError):
             pass
         return []
@@ -203,16 +214,29 @@ class DocumentProcessor:
             return []
         
         try:
+            coords = []
             # Handle different polygon formats
             if hasattr(polygon, '__iter__'):
-                coords = []
                 for point in polygon:
                     if hasattr(point, 'x') and hasattr(point, 'y'):
-                        coords.append((point.x, point.y))
+                        # Azure Document Intelligence Point object
+                        coords.append((float(point.x), float(point.y)))
+                    elif isinstance(point, dict) and 'x' in point and 'y' in point:
+                        # Dictionary format
+                        coords.append((float(point['x']), float(point['y'])))
                     elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                        # List/tuple format
                         coords.append((float(point[0]), float(point[1])))
+                    elif hasattr(point, '__getitem__') and len(point) >= 2:
+                        # Array-like object
+                        coords.append((float(point[0]), float(point[1])))
+            
+            # Validate that we have at least 2 points for a valid shape
+            if len(coords) >= 2:
                 return coords
-        except Exception:
+                
+        except (AttributeError, ValueError, TypeError, IndexError) as e:
+            print(f"Error converting polygon: {e}")
             pass
         
         return []
