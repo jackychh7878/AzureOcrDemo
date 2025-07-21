@@ -9,27 +9,127 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import streamlit as st
 from config import ANNOTATION_COLORS, CONFIDENCE_THRESHOLDS
+try:
+    import fitz  # PyMuPDF for PDF processing
+    PDF_SUPPORT = True
+except ImportError:
+    try:
+        from pdf2image import convert_from_bytes
+        PDF_SUPPORT = True
+    except ImportError:
+        PDF_SUPPORT = False
 
 
 class DocumentVisualizer:
     def __init__(self):
         self.colors = ANNOTATION_COLORS
         
+    def _convert_pdf_to_image(self, pdf_bytes: bytes, page_number: int = 0) -> Image.Image:
+        """
+        Convert PDF page to PIL Image
+        
+        Args:
+            pdf_bytes: PDF content as bytes
+            page_number: Page number to convert (0-indexed)
+            
+        Returns:
+            PIL Image of the PDF page
+        """
+        if not PDF_SUPPORT:
+            raise ImportError("PDF processing library not available. Install PyMuPDF or pdf2image.")
+        
+        try:
+            # Try PyMuPDF first (more efficient)
+            if 'fitz' in globals():
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                if page_number >= doc.page_count:
+                    page_number = 0  # Default to first page
+                
+                page = doc.load_page(page_number)
+                
+                # Render page to image with good resolution
+                mat = fitz.Matrix(2.0, 2.0)  # 2x zoom for better quality
+                pix = page.get_pixmap(matrix=mat)
+                img_data = pix.tobytes("ppm")
+                
+                doc.close()
+                return Image.open(io.BytesIO(img_data))
+                
+            # Fallback to pdf2image
+            elif 'convert_from_bytes' in globals():
+                images = convert_from_bytes(pdf_bytes, dpi=200, first_page=page_number+1, last_page=page_number+1)
+                if images:
+                    return images[0]
+                else:
+                    raise Exception("No pages found in PDF")
+                    
+        except Exception as e:
+            st.error(f"Error converting PDF to image: {str(e)}")
+            # Create a placeholder image
+            placeholder = Image.new('RGB', (800, 1000), color='white')
+            draw = ImageDraw.Draw(placeholder)
+            draw.text((50, 50), f"PDF Preview Unavailable\nError: {str(e)}", fill='black')
+            return placeholder
+        
+        # Final fallback
+        raise ImportError("No PDF processing library available")
+    
+    def get_pdf_page_count(self, pdf_bytes: bytes) -> int:
+        """
+        Get the total number of pages in a PDF
+        
+        Args:
+            pdf_bytes: PDF content as bytes
+            
+        Returns:
+            Number of pages in the PDF
+        """
+        if not PDF_SUPPORT:
+            return 1
+        
+        try:
+            # Try PyMuPDF first
+            if 'fitz' in globals():
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                page_count = doc.page_count
+                doc.close()
+                return page_count
+                
+            # Fallback - try to count pages with pdf2image
+            elif 'convert_from_bytes' in globals():
+                # This is less efficient but works
+                images = convert_from_bytes(pdf_bytes, dpi=72)  # Low DPI just for counting
+                return len(images)
+                
+        except Exception as e:
+            print(f"Error getting PDF page count: {e}")
+            return 1
+        
+        return 1
+        
     def draw_annotations(self, image_bytes: bytes, extracted_data: Dict[str, Any], 
-                        selected_fields: List[str] = None) -> Image.Image:
+                        selected_fields: List[str] = None, page_number: int = 0) -> Image.Image:
         """
         Draw bounding boxes and annotations on the document image
         
         Args:
-            image_bytes: Original image as bytes
+            image_bytes: Original document as bytes (image or PDF)
             extracted_data: Extracted data with polygon coordinates
             selected_fields: List of field names to highlight (None for all)
+            page_number: Page number to display (0-indexed, used for PDFs)
             
         Returns:
             PIL Image with annotations
         """
-        # Convert bytes to PIL Image
-        image = Image.open(io.BytesIO(image_bytes))
+        # Check if this is a PDF
+        file_type = extracted_data.get('file_type', '').lower()
+        
+        if file_type == '.pdf' or image_bytes.startswith(b'%PDF'):
+            # Convert PDF to image for the specified page
+            image = self._convert_pdf_to_image(image_bytes, page_number=page_number)
+        else:
+            # Convert bytes to PIL Image (for single-page images)
+            image = Image.open(io.BytesIO(image_bytes))
         
         # Convert to RGB if needed
         if image.mode != 'RGB':
@@ -74,8 +174,12 @@ class DocumentVisualizer:
         fields = extracted_data.get("fields", [])
         print(f"DEBUG: Processing {len(fields)} total fields")
         
+        # Filter fields by page number (1-based in data, 0-based in display)
+        page_fields = [field for field in fields if field.get("page_number", 1) == page_number + 1]
+        print(f"DEBUG: Found {len(page_fields)} fields on page {page_number + 1}")
+        
         annotations_drawn = 0
-        for i, field in enumerate(fields):
+        for i, field in enumerate(page_fields):
             if selected_fields and field["name"] not in selected_fields:
                 continue
                 
@@ -91,7 +195,7 @@ class DocumentVisualizer:
             else:
                 print(f"DEBUG: No polygon for field '{field['name']}'")
         
-        print(f"DEBUG: Successfully drew {annotations_drawn} annotations")
+        print(f"DEBUG: Successfully drew {annotations_drawn} annotations on page {page_number + 1}")
         
         # Draw table annotations if no specific fields selected
         if not selected_fields:

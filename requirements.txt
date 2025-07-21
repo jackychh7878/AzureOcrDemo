@@ -8,3 +8,4 @@ numpy
 plotly
 python-dotenv
 azure-storage-blob==12.25.1
+PyMuPDF

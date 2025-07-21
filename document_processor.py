@@ -74,13 +74,14 @@ class DocumentProcessor:
             credential=AzureKeyCredential(key)
         )
     
-    def analyze_document(self, file_bytes: bytes, model_type: str) -> Dict[str, Any]:
+    def analyze_document(self, file_bytes: bytes, model_type: str, filename: str = None) -> Dict[str, Any]:
         """
         Analyze a document using Azure Document Intelligence
         
         Args:
             file_bytes: Document content as bytes
             model_type: Type of document model to use
+            filename: Original filename to determine file extension
             
         Returns:
             Dictionary containing extracted data and metadata
@@ -96,11 +97,27 @@ class DocumentProcessor:
             sas_url = None
             
             try:
-                # Generate a unique blob name
-                blob_name = f"temp_document_{uuid.uuid4().hex}_{int(datetime.now().timestamp())}"
+                # Determine file extension from filename or default to pdf
+                file_extension = ".pdf"  # Default to PDF for document processing
+                if filename:
+                    file_extension = os.path.splitext(filename.lower())[1]
+                    if not file_extension:
+                        # Try to detect from file content
+                        if file_bytes.startswith(b'%PDF'):
+                            file_extension = ".pdf"
+                        elif file_bytes.startswith(b'\xff\xd8\xff'):
+                            file_extension = ".jpg"
+                        elif file_bytes.startswith(b'\x89PNG'):
+                            file_extension = ".png"
+                        else:
+                            file_extension = ".pdf"  # Default fallback
                 
-                # Create temporary file from bytes
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as temp_file:
+                # Generate a unique blob name with proper extension
+                timestamp = int(datetime.now().timestamp())
+                blob_name = f"temp_document_{uuid.uuid4().hex}_{timestamp}{file_extension}"
+                
+                # Create temporary file from bytes with proper extension
+                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
                     temp_file.write(file_bytes)
                     temp_file_path = temp_file.name
                 
@@ -123,7 +140,13 @@ class DocumentProcessor:
                 result = poller.result()
                 
                 # Convert to dictionary for processing
-                return self._process_analysis_result(result, model_type)
+                processed_result = self._process_analysis_result(result, model_type)
+                
+                # Add file type information for visualization
+                processed_result['file_type'] = file_extension.lower()
+                processed_result['filename'] = filename
+                
+                return processed_result
                 
             finally:
                 # Clean up temporary file

@@ -19,6 +19,8 @@ def init_session_state():
         st.session_state.original_image = None
     if 'selected_model' not in st.session_state:
         st.session_state.selected_model = "Invoice"
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = 0
 
 
 def setup_sidebar():
@@ -69,11 +71,11 @@ def setup_sidebar():
     
     # Add descriptions for each model type
     model_descriptions = {
-        "Invoice": "Extract structured data from invoices including vendor, customer, items, totals, etc.",
-        "Receipt": "Extract data from receipts including merchant name, transaction date, items, and totals",
-        "ID Card": "Extract data from identity documents like driver's licenses, passports, etc.",
-        "Bank Statement": "Extract layout and text from bank statements and financial documents",
-        "Layout": "Extract text, tables, and layout information from any document"
+        "Invoice": "Extract structured data from invoices including vendor, customer, items, totals, etc. (Images & PDFs)",
+        "Receipt": "Extract data from receipts including merchant name, transaction date, items, and totals (Images & PDFs)",
+        "ID Card": "Extract data from identity documents like driver's licenses, passports, etc. (Images & PDFs)",
+        "Bank Statement": "Extract layout and text from bank statements and financial documents (Images & PDFs)",
+        "Layout": "Extract text, tables, and layout information from any document (Images & PDFs)"
     }
     
     st.sidebar.info(f"**Description**: {model_descriptions.get(selected_model, 'Document analysis')}")
@@ -115,12 +117,12 @@ def upload_file():
         with col3:
             st.metric("File Type", uploaded_file.type)
         
-        return uploaded_file.read()
+        return uploaded_file.read(), uploaded_file.name
     
-    return None
+    return None, None
 
 
-def process_document(file_bytes, endpoint, key, model_type):
+def process_document(file_bytes, filename, endpoint, key, model_type):
     """Process document with Azure Document Intelligence"""
     if not endpoint or not key:
         st.error("Please provide Azure Document Intelligence endpoint and API key in the sidebar.")
@@ -129,7 +131,7 @@ def process_document(file_bytes, endpoint, key, model_type):
     try:
         with st.spinner("🔍 Analyzing document..."):
             processor = DocumentProcessor(endpoint, key)
-            extracted_data = processor.analyze_document(file_bytes, model_type)
+            extracted_data = processor.analyze_document(file_bytes, model_type, filename)
         
         if extracted_data:
             st.success("✅ Document analysis completed!")
@@ -151,8 +153,54 @@ def display_results(extracted_data, file_bytes):
     # Create visualizer
     visualizer = DocumentVisualizer()
     
+    # Check if this is a multi-page PDF
+    file_type = extracted_data.get('file_type', '').lower()
+    is_pdf = file_type == '.pdf' or file_bytes.startswith(b'%PDF')
+    total_pages = 1
+    current_page = 0
+    
+    if is_pdf:
+        total_pages = visualizer.get_pdf_page_count(file_bytes)
+        
+        # Add page navigation for PDFs
+        if total_pages > 1:
+            st.subheader("📄 Page Navigation")
+            col_nav1, col_nav2, col_nav3 = st.columns([1, 2, 1])
+            
+            with col_nav1:
+                if st.button("⬅️ Previous Page"):
+                    current_page = max(0, st.session_state.get('current_page', 0) - 1)
+                    st.session_state.current_page = current_page
+            
+            with col_nav2:
+                # Page selector
+                current_page = st.selectbox(
+                    "Select Page:",
+                    options=list(range(total_pages)),
+                    format_func=lambda x: f"Page {x + 1}",
+                    index=st.session_state.get('current_page', 0),
+                    key="page_selector"
+                )
+                st.session_state.current_page = current_page
+                
+                # Show page info
+                st.info(f"📊 Document has {total_pages} pages")
+            
+            with col_nav3:
+                if st.button("➡️ Next Page"):
+                    current_page = min(total_pages - 1, st.session_state.get('current_page', 0) + 1)
+                    st.session_state.current_page = current_page
+        else:
+            current_page = 0
+    
     # Get all fields for interaction
     all_fields = [field["name"] for field in extracted_data.get("fields", [])]
+    
+    # Filter fields by current page for multi-page PDFs
+    if is_pdf and total_pages > 1:
+        current_page_fields = [field["name"] for field in extracted_data.get("fields", []) 
+                              if field.get("page_number", 1) == current_page + 1]
+        all_fields = current_page_fields
     
     # Add field selector at the top
     if all_fields:
@@ -192,13 +240,22 @@ def display_results(extracted_data, file_bytes):
     with col1:
         st.subheader("📄 Document with Annotations")
         
+        # Show PDF notice if applicable
+        if is_pdf:
+            if total_pages > 1:
+                st.info(f"📄 Multi-page PDF detected - showing page {current_page + 1} of {total_pages}")
+            else:
+                st.info("📄 PDF detected - converted to image for annotation visualization")
+        
         # Show annotation legend
         if fields_to_show:
-            st.info(f"💡 Showing annotations for {len(fields_to_show)} field(s). Use the selector above to focus on specific fields.")
+            page_info = f" on page {current_page + 1}" if is_pdf and total_pages > 1 else ""
+            st.info(f"💡 Showing annotations for {len(fields_to_show)} field(s){page_info}. Use the selector above to focus on specific fields.")
         
         # Draw annotations
-        annotated_image = visualizer.draw_annotations(file_bytes, extracted_data, fields_to_show)
-        st.image(annotated_image, caption="Document with Field Annotations", use_container_width=True)
+        annotated_image = visualizer.draw_annotations(file_bytes, extracted_data, fields_to_show, current_page)
+        page_caption = f"Page {current_page + 1} of {total_pages}" if is_pdf and total_pages > 1 else "Document with Field Annotations"
+        st.image(annotated_image, caption=page_caption, use_container_width=True)
         
         # Display legend
         st.markdown(visualizer.create_legend(), unsafe_allow_html=True)
@@ -210,8 +267,23 @@ def display_results(extracted_data, file_bytes):
         fields = extracted_data.get("fields", [])
         
         if fields:
+            # Filter fields by current page for multi-page PDFs
+            if is_pdf and total_pages > 1:
+                show_all_pages = st.checkbox("📋 Show fields from all pages", value=False, 
+                                           help="When checked, shows fields from all pages instead of just the current page")
+                
+                if show_all_pages:
+                    page_fields = fields
+                    st.write(f"📄 Showing fields from all {total_pages} pages")
+                else:
+                    page_fields = [field for field in fields if field.get("page_number", 1) == current_page + 1]
+                    st.write(f"📄 Showing fields from page {current_page + 1} of {total_pages}")
+            else:
+                page_fields = fields
+                show_all_pages = False
+            
             # Sort fields by confidence (highest first)
-            sorted_fields = sorted(fields, key=lambda x: x.get('confidence', 0), reverse=True)
+            sorted_fields = sorted(page_fields, key=lambda x: x.get('confidence', 0), reverse=True)
             
             # Create searchable/filterable view
             search_term = st.text_input("🔍 Search fields:", placeholder="Type to filter fields...")
@@ -222,7 +294,8 @@ def display_results(extracted_data, file_bytes):
             else:
                 filtered_fields = sorted_fields
             
-            st.write(f"Showing {len(filtered_fields)} of {len(fields)} fields")
+            total_on_page = len(page_fields)
+            st.write(f"Showing {len(filtered_fields)} of {total_on_page} fields" + (f" on page {current_page + 1}" if is_pdf and total_pages > 1 else ""))
             
             # Display each field
             for i, field in enumerate(filtered_fields):
@@ -251,39 +324,52 @@ def display_results(extracted_data, file_bytes):
                     border_color = "#0066CC" if is_highlighted else "#e0e0e0"
                     border_width = "3px" if is_highlighted else "1px"
                     
-                    # Display field info in a format similar to mockup
-                    st.markdown(f"""
-                    <div style="border: {border_width} solid {border_color}; border-radius: 8px; padding: 12px; margin: 8px 0; background-color: {'#f0f8ff' if is_highlighted else '#ffffff'};">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                            <div style="flex-grow: 1;">
-                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-                                    <strong style="color: #333; font-size: 14px;">{field_name}</strong>
-                                    <span style="font-size: 11px; color: #666; background: #f5f5f5; padding: 2px 6px; border-radius: 10px;">{highlight_status}</span>
-                                </div>
-                                <div style="color: #555; font-size: 13px; margin-bottom: 4px; word-wrap: break-word;">
-                                    <strong>Value:</strong> {field_value}
-                                </div>
-                                <div style="color: #777; font-size: 11px;">
-                                    <strong>Location:</strong> {"On image" if field.get("polygon") else "Text only"}
-                                </div>
-                            </div>
-                            <div style="text-align: right; margin-left: 12px;">
-                                <div style="color: {confidence_color}; font-weight: bold; font-size: 14px;">
-                                    {confidence_emoji} {confidence:.1%}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    # Display field info using Streamlit components instead of raw HTML
+                    # Create container with border effect
+                    border_style = "border: 3px solid #0066CC;" if is_highlighted else "border: 1px solid #e0e0e0;"
+                    bg_color = "#f0f8ff" if is_highlighted else "#ffffff"
+                    
+                    with st.container():
+                        # Use columns for layout
+                        col_field, col_conf = st.columns([4, 1])
+                        
+                        with col_field:
+                            # Field name with highlight status
+                            if is_highlighted:
+                                st.markdown(f"**🎯 {field_name}** `{highlight_status}`")
+                            else:
+                                st.markdown(f"**{field_name}** `{highlight_status}`")
+                            
+                            # Field value
+                            st.write(f"**Value:** {field_value}")
+                            
+                            # Location info
+                            location_text = "On image" if field.get("polygon") else "Text only"
+                            if is_pdf and total_pages > 1:
+                                location_text += f" | Page {field.get('page_number', 1)}"
+                            st.caption(f"**Location:** {location_text}")
+                        
+                        with col_conf:
+                            # Confidence display
+                            st.markdown(f"<div style='text-align: center; color: {confidence_color}; font-weight: bold; font-size: 16px;'>{confidence_emoji}<br/>{confidence:.1%}</div>", unsafe_allow_html=True)
+                        
+                        # Add separator
+                        st.divider()
             
             # Summary statistics
             st.markdown("---")
-            st.markdown("### 📈 Summary")
-            total_fields = len(fields)
-            high_conf_count = sum(1 for f in fields if f.get('confidence', 0) >= 0.8)
-            medium_conf_count = sum(1 for f in fields if 0.5 <= f.get('confidence', 0) < 0.8)
-            low_conf_count = sum(1 for f in fields if f.get('confidence', 0) < 0.5)
-            highlighted_count = len([f for f in fields if f.get("name") in fields_to_show])
+            summary_title = "📈 Summary"
+            if is_pdf and total_pages > 1 and not show_all_pages:
+                summary_title += f" (Page {current_page + 1})"
+            st.markdown(f"### {summary_title}")
+            
+            # Use page_fields for statistics when viewing single page
+            stats_fields = page_fields
+            total_fields = len(stats_fields)
+            high_conf_count = sum(1 for f in stats_fields if f.get('confidence', 0) >= 0.8)
+            medium_conf_count = sum(1 for f in stats_fields if 0.5 <= f.get('confidence', 0) < 0.8)
+            low_conf_count = sum(1 for f in stats_fields if f.get('confidence', 0) < 0.5)
+            highlighted_count = len([f for f in stats_fields if f.get("name") in fields_to_show])
             
             col_a, col_b = st.columns(2)
             with col_a:
@@ -295,6 +381,11 @@ def display_results(extracted_data, file_bytes):
             
             if low_conf_count > 0:
                 st.metric("🔴 Low Confidence", f"{low_conf_count} ({low_conf_count/total_fields*100:.0f}%)")
+            
+            # Add total document statistics for multi-page PDFs
+            if is_pdf and total_pages > 1 and not show_all_pages:
+                total_doc_fields = len(fields)
+                st.write(f"**Document Total:** {total_doc_fields} fields across {total_pages} pages")
         
         else:
             st.info("No fields extracted from the document.")
@@ -308,6 +399,7 @@ def display_results(extracted_data, file_bytes):
     3. **Left Panel**: Shows the document with colored bounding boxes around selected fields
     4. **Color Coding**: 🟢 High confidence (≥80%) | 🟡 Medium (50-79%) | 🔴 Low (<50%)
     5. **Search**: Use the search box to quickly find specific fields or values
+    6. **Multi-page PDFs**: Navigate pages using the page selector, or view all pages at once with the checkbox
     """)
 
 
@@ -412,7 +504,7 @@ def main():
     
     # File upload
     st.subheader("📤 Upload Document")
-    file_bytes = upload_file()
+    file_bytes, filename = upload_file()
     
     if file_bytes:
         # Store original image
@@ -420,7 +512,7 @@ def main():
         
         # Process button
         if st.button("🚀 Analyze Document", type="primary"):
-            extracted_data = process_document(file_bytes, endpoint, key, selected_model)
+            extracted_data = process_document(file_bytes, filename, endpoint, key, selected_model)
             st.session_state.extracted_data = extracted_data
         
         # Display results if available
