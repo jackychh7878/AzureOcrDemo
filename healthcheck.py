@@ -37,11 +37,31 @@ def list_available_models():
     print("\n📋 Available Document Models:")
     print("-" * 50)
     
-    for model_name, model_info in DOCUMENT_MODELS.items():
+    # Model descriptions
+    model_descriptions = {
+        "Invoice": "Extract structured data from invoices including vendor, customer, items, totals, etc.",
+        "Receipt": "Extract data from receipts including merchant name, transaction date, items, and totals",
+        "ID Card": "Extract data from identity documents like driver's licenses, passports, etc.",
+        "Bank Statement": "Extract layout and text from bank statements and financial documents",
+        "Layout": "Extract text, tables, and layout information from any document"
+    }
+    
+    # Supported fields for each model type
+    supported_fields = {
+        "Invoice": ["VendorName", "CustomerName", "InvoiceTotal", "DueDate", "InvoiceDate", "Items"],
+        "Receipt": ["MerchantName", "TransactionDate", "Total", "Subtotal", "Items"],
+        "ID Card": ["FirstName", "LastName", "DocumentNumber", "DateOfBirth", "DateOfExpiration", "Address"],
+        "Bank Statement": ["Tables", "Text", "KeyValuePairs", "SelectionMarks"],
+        "Layout": ["Tables", "Text", "Lines", "Words", "SelectionMarks"]
+    }
+    
+    for model_name, model_id in DOCUMENT_MODELS.items():
         print(f"🔹 {model_name}")
-        print(f"   Model ID: {model_info['model_id']}")
-        print(f"   Description: {model_info['description']}")
-        print(f"   Fields: {', '.join(model_info['supported_fields'][:3])}...")
+        print(f"   Model ID: {model_id}")
+        print(f"   Description: {model_descriptions.get(model_name, 'Document analysis')}")
+        fields = supported_fields.get(model_name, [])
+        if fields:
+            print(f"   Fields: {', '.join(fields[:3])}...")
         print()
 
 

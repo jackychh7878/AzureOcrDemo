@@ -66,13 +66,32 @@ def setup_sidebar():
     )
     
     # Display model information
-    model_info = DOCUMENT_MODELS[selected_model]
-    st.sidebar.info(f"**Model**: {model_info['model_id']}")
-    st.sidebar.info(f"**Description**: {model_info['description']}")
+    model_id = DOCUMENT_MODELS[selected_model]
+    st.sidebar.info(f"**Model**: {model_id}")
+    
+    # Add descriptions for each model type
+    model_descriptions = {
+        "Invoice": "Extract structured data from invoices including vendor, customer, items, totals, etc.",
+        "Receipt": "Extract data from receipts including merchant name, transaction date, items, and totals",
+        "ID Card": "Extract data from identity documents like driver's licenses, passports, etc.",
+        "Bank Statement": "Extract layout and text from bank statements and financial documents",
+        "Layout": "Extract text, tables, and layout information from any document"
+    }
+    
+    st.sidebar.info(f"**Description**: {model_descriptions.get(selected_model, 'Document analysis')}")
+    
+    # Supported fields for each model type
+    supported_fields = {
+        "Invoice": ["VendorName", "CustomerName", "InvoiceTotal", "DueDate", "InvoiceDate", "Items"],
+        "Receipt": ["MerchantName", "TransactionDate", "Total", "Subtotal", "Items"],
+        "ID Card": ["FirstName", "LastName", "DocumentNumber", "DateOfBirth", "DateOfExpiration", "Address"],
+        "Bank Statement": ["Tables", "Text", "KeyValuePairs", "SelectionMarks"],
+        "Layout": ["Tables", "Text", "Lines", "Words", "SelectionMarks"]
+    }
     
     # Supported fields
     with st.sidebar.expander("Supported Fields"):
-        for field in model_info['supported_fields']:
+        for field in supported_fields.get(selected_model, []):
             st.write(f"• {field}")
     
     st.session_state.selected_model = selected_model

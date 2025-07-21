@@ -5,7 +5,6 @@ Azure Document Intelligence processor for extracting data from documents
 import io
 from typing import Dict, List, Tuple, Any, Optional
 from azure.ai.documentintelligence import DocumentIntelligenceClient
-from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 from azure.core.credentials import AzureKeyCredential
 import streamlit as st
 from config import DOCUMENT_MODELS, CONFIDENCE_THRESHOLDS
@@ -21,208 +20,164 @@ class DocumentProcessor:
     
     def analyze_document(self, file_bytes: bytes, model_type: str) -> Dict[str, Any]:
         """
-        Analyze document using specified model
+        Analyze a document using Azure Document Intelligence
         
         Args:
-            file_bytes: Document file as bytes
+            file_bytes: Document content as bytes
             model_type: Type of document model to use
             
         Returns:
             Dictionary containing extracted data and metadata
         """
         try:
-            model_id = DOCUMENT_MODELS[model_type]["model_id"]
+            # Get the model ID from the configuration
+            model_id = DOCUMENT_MODELS.get(model_type)
+            if not model_id:
+                raise ValueError(f"Unknown model type: {model_type}")
             
-            # Create analyze request
-            analyze_request = AnalyzeDocumentRequest(bytes_source=file_bytes)
-            
-            # Start analysis
+            # Begin analysis - pass document bytes directly
             poller = self.client.begin_analyze_document(
                 model_id=model_id,
-                analyze_request=analyze_request
+                document=file_bytes
             )
-            
-            # Get result
             result = poller.result()
             
-            # Process and return structured data
+            # Convert to dictionary for processing
             return self._process_analysis_result(result, model_type)
             
         except Exception as e:
             st.error(f"Error analyzing document: {str(e)}")
             return {}
     
-    def _process_analysis_result(self, result: Any, model_type: str) -> Dict[str, Any]:
-        """Process the analysis result into structured format"""
-        processed_data = {
-            "model_type": model_type,
-            "fields": [],
-            "tables": [],
-            "pages": [],
-            "confidence_stats": {"high": 0, "medium": 0, "low": 0}
+    def _process_analysis_result(self, result, model_type: str) -> Dict[str, Any]:
+        """Process the analysis result and extract relevant information"""
+        processed_result = {
+            'model_type': model_type,
+            'confidence_threshold': CONFIDENCE_THRESHOLDS.get(model_type, 0.5),
+            'pages': [],
+            'documents': [],
+            'tables': [],
+            'key_value_pairs': []
         }
         
         # Process pages
         if hasattr(result, 'pages') and result.pages:
             for page in result.pages:
-                page_data = {
-                    "page_number": page.page_number,
-                    "width": page.width,
-                    "height": page.height,
-                    "unit": page.unit,
-                    "angle": getattr(page, 'angle', 0)
+                page_info = {
+                    'page_number': page.page_number,
+                    'width': page.width,
+                    'height': page.height,
+                    'unit': page.unit,
+                    'lines': [],
+                    'words': []
                 }
-                processed_data["pages"].append(page_data)
+                
+                # Extract lines
+                if hasattr(page, 'lines') and page.lines:
+                    for line in page.lines:
+                        line_info = {
+                            'content': line.content,
+                            'bounding_box': line.polygon if hasattr(line, 'polygon') else []
+                        }
+                        page_info['lines'].append(line_info)
+                
+                # Extract words
+                if hasattr(page, 'words') and page.words:
+                    for word in page.words:
+                        word_info = {
+                            'content': word.content,
+                            'confidence': word.confidence,
+                            'bounding_box': word.polygon if hasattr(word, 'polygon') else []
+                        }
+                        page_info['words'].append(word_info)
+                
+                processed_result['pages'].append(page_info)
         
-        # Process documents (main extracted data)
+        # Process documents (for prebuilt models)
         if hasattr(result, 'documents') and result.documents:
             for doc in result.documents:
+                doc_info = {
+                    'doc_type': doc.doc_type,
+                    'confidence': doc.confidence,
+                    'fields': {}
+                }
+                
                 if hasattr(doc, 'fields') and doc.fields:
                     for field_name, field_value in doc.fields.items():
-                        field_data = self._extract_field_data(field_name, field_value)
-                        if field_data:
-                            processed_data["fields"].append(field_data)
-                            self._update_confidence_stats(processed_data["confidence_stats"], field_data.get("confidence", 0))
+                        if hasattr(field_value, 'content'):
+                            doc_info['fields'][field_name] = {
+                                'content': field_value.content,
+                                'confidence': field_value.confidence,
+                                'value': field_value.value if hasattr(field_value, 'value') else field_value.content
+                            }
+                
+                processed_result['documents'].append(doc_info)
         
         # Process tables
         if hasattr(result, 'tables') and result.tables:
             for table in result.tables:
-                table_data = self._extract_table_data(table)
-                processed_data["tables"].append(table_data)
-        
-        # For layout model, also process key-value pairs and text
-        if model_type == "Bank Statement":
-            processed_data = self._process_layout_specific_data(result, processed_data)
-        
-        return processed_data
-    
-    def _extract_field_data(self, field_name: str, field_value: Any) -> Optional[Dict[str, Any]]:
-        """Extract structured data from a field"""
-        if not field_value:
-            return None
-        
-        field_data = {
-            "name": field_name,
-            "type": getattr(field_value, 'type', 'string'),
-            "confidence": getattr(field_value, 'confidence', 0.0),
-            "polygon": [],
-            "page_number": 1
-        }
-        
-        # Extract value based on type
-        if hasattr(field_value, 'value'):
-            if hasattr(field_value.value, 'value'):
-                field_data["value"] = field_value.value.value
-            else:
-                field_data["value"] = field_value.value
-        elif hasattr(field_value, 'content'):
-            field_data["value"] = field_value.content
-        else:
-            field_data["value"] = str(field_value)
-        
-        # Extract bounding regions (polygons)
-        if hasattr(field_value, 'bounding_regions') and field_value.bounding_regions:
-            for region in field_value.bounding_regions:
-                field_data["page_number"] = region.page_number
-                if hasattr(region, 'polygon') and region.polygon:
-                    # Convert polygon points to list of [x, y] coordinates
-                    polygon_points = []
-                    for point in region.polygon:
-                        polygon_points.append([point.x, point.y])
-                    field_data["polygon"] = polygon_points
-                    break
-        
-        return field_data
-    
-    def _extract_table_data(self, table: Any) -> Dict[str, Any]:
-        """Extract table data with cell polygons"""
-        table_data = {
-            "row_count": table.row_count,
-            "column_count": table.column_count,
-            "cells": [],
-            "polygon": []
-        }
-        
-        # Extract table bounding region
-        if hasattr(table, 'bounding_regions') and table.bounding_regions:
-            region = table.bounding_regions[0]
-            if hasattr(region, 'polygon') and region.polygon:
-                polygon_points = []
-                for point in region.polygon:
-                    polygon_points.append([point.x, point.y])
-                table_data["polygon"] = polygon_points
-        
-        # Extract cells
-        if hasattr(table, 'cells') and table.cells:
-            for cell in table.cells:
-                cell_data = {
-                    "content": cell.content,
-                    "row_index": cell.row_index,
-                    "column_index": cell.column_index,
-                    "confidence": getattr(cell, 'confidence', 0.0),
-                    "polygon": []
+                table_info = {
+                    'row_count': table.row_count,
+                    'column_count': table.column_count,
+                    'cells': []
                 }
                 
-                # Extract cell polygon
-                if hasattr(cell, 'bounding_regions') and cell.bounding_regions:
-                    region = cell.bounding_regions[0]
-                    if hasattr(region, 'polygon') and region.polygon:
-                        polygon_points = []
-                        for point in region.polygon:
-                            polygon_points.append([point.x, point.y])
-                        cell_data["polygon"] = polygon_points
+                if hasattr(table, 'cells') and table.cells:
+                    for cell in table.cells:
+                        cell_info = {
+                            'content': cell.content,
+                            'row_index': cell.row_index,
+                            'column_index': cell.column_index,
+                            'row_span': cell.row_span if hasattr(cell, 'row_span') else 1,
+                            'column_span': cell.column_span if hasattr(cell, 'column_span') else 1
+                        }
+                        table_info['cells'].append(cell_info)
                 
-                table_data["cells"].append(cell_data)
+                processed_result['tables'].append(table_info)
         
-        return table_data
-    
-    def _process_layout_specific_data(self, result: Any, processed_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process layout-specific data for bank statements"""
         # Process key-value pairs
         if hasattr(result, 'key_value_pairs') and result.key_value_pairs:
             for kvp in result.key_value_pairs:
-                key_content = kvp.key.content if kvp.key else "Unknown Key"
-                value_content = kvp.value.content if kvp.value else "No Value"
-                
-                field_data = {
-                    "name": key_content,
-                    "value": value_content,
-                    "type": "key_value_pair",
-                    "confidence": getattr(kvp, 'confidence', 0.0),
-                    "polygon": [],
-                    "page_number": 1
+                kvp_info = {
+                    'key': kvp.key.content if kvp.key else '',
+                    'value': kvp.value.content if kvp.value else '',
+                    'confidence': kvp.confidence
                 }
-                
-                # Get polygon from key or value
-                if kvp.key and hasattr(kvp.key, 'bounding_regions') and kvp.key.bounding_regions:
-                    region = kvp.key.bounding_regions[0]
-                    if hasattr(region, 'polygon') and region.polygon:
-                        polygon_points = []
-                        for point in region.polygon:
-                            polygon_points.append([point.x, point.y])
-                        field_data["polygon"] = polygon_points
-                        field_data["page_number"] = region.page_number
-                
-                processed_data["fields"].append(field_data)
-                self._update_confidence_stats(processed_data["confidence_stats"], field_data["confidence"])
+                processed_result['key_value_pairs'].append(kvp_info)
         
-        return processed_data
+        return processed_result
     
-    def _update_confidence_stats(self, stats: Dict[str, int], confidence: float):
-        """Update confidence statistics"""
-        if confidence >= CONFIDENCE_THRESHOLDS["high"]:
-            stats["high"] += 1
-        elif confidence >= CONFIDENCE_THRESHOLDS["medium"]:
-            stats["medium"] += 1
-        else:
-            stats["low"] += 1
-    
-    @staticmethod
-    def get_confidence_category(confidence: float) -> str:
-        """Get confidence category for a given confidence score"""
-        if confidence >= CONFIDENCE_THRESHOLDS["high"]:
-            return "high"
-        elif confidence >= CONFIDENCE_THRESHOLDS["medium"]:
-            return "medium"
-        else:
-            return "low" 
+    def extract_key_fields(self, analysis_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract key fields based on document type"""
+        model_type = analysis_result.get('model_type', 'layout')
+        key_fields = {}
+        
+        if analysis_result.get('documents'):
+            doc = analysis_result['documents'][0]
+            fields = doc.get('fields', {})
+            
+            if model_type == 'invoice':
+                key_fields = {
+                    'vendor_name': fields.get('VendorName', {}).get('content', ''),
+                    'customer_name': fields.get('CustomerName', {}).get('content', ''),
+                    'invoice_date': fields.get('InvoiceDate', {}).get('content', ''),
+                    'invoice_total': fields.get('InvoiceTotal', {}).get('content', ''),
+                    'due_date': fields.get('DueDate', {}).get('content', '')
+                }
+            elif model_type == 'receipt':
+                key_fields = {
+                    'merchant_name': fields.get('MerchantName', {}).get('content', ''),
+                    'transaction_date': fields.get('TransactionDate', {}).get('content', ''),
+                    'total': fields.get('Total', {}).get('content', ''),
+                    'subtotal': fields.get('Subtotal', {}).get('content', '')
+                }
+            elif model_type == 'identity':
+                key_fields = {
+                    'first_name': fields.get('FirstName', {}).get('content', ''),
+                    'last_name': fields.get('LastName', {}).get('content', ''),
+                    'document_number': fields.get('DocumentNumber', {}).get('content', ''),
+                    'date_of_birth': fields.get('DateOfBirth', {}).get('content', ''),
+                    'date_of_expiration': fields.get('DateOfExpiration', {}).get('content', '')
+                }
+        
+        return key_fields 

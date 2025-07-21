@@ -13,23 +13,13 @@ AZURE_DOC_INTEL_ENDPOINT = os.getenv("AZURE_DOC_INTEL_ENDPOINT", "")
 AZURE_DOC_INTEL_KEY = os.getenv("AZURE_DOC_INTEL_KEY", "")
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
-# Document Intelligence Models
+# Document Intelligence Models - simplified structure
 DOCUMENT_MODELS = {
-    "Invoice": {
-        "model_id": "prebuilt-invoice",
-        "description": "Extract structured data from invoices including vendor, customer, items, totals, etc.",
-        "supported_fields": ["VendorName", "CustomerName", "InvoiceTotal", "DueDate", "InvoiceDate", "Items"]
-    },
-    "ID Card": {
-        "model_id": "prebuilt-idDocument",
-        "description": "Extract data from identity documents like driver's licenses, passports, etc.",
-        "supported_fields": ["FirstName", "LastName", "DocumentNumber", "DateOfBirth", "DateOfExpiration", "Address"]
-    },
-    "Bank Statement": {
-        "model_id": "prebuilt-layout",
-        "description": "Extract layout and text from bank statements and financial documents",
-        "supported_fields": ["Tables", "Text", "KeyValuePairs", "SelectionMarks"]
-    }
+    "Invoice": "prebuilt-invoice",
+    "Receipt": "prebuilt-receipt", 
+    "ID Card": "prebuilt-idDocument",
+    "Bank Statement": "prebuilt-layout",
+    "Layout": "prebuilt-layout"
 }
 
 # Supported file types
@@ -44,6 +34,11 @@ ANNOTATION_COLORS = {
 }
 
 CONFIDENCE_THRESHOLDS = {
+    "Invoice": 0.7,
+    "Receipt": 0.7,
+    "ID Card": 0.8,
+    "Bank Statement": 0.5,
+    "Layout": 0.5,
     "high": 0.8,
     "medium": 0.5,
     "low": 0.0
