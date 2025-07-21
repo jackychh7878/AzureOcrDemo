@@ -169,7 +169,7 @@ app.py                 # Main Streamlit application
 ├── config.py          # Configuration and model settings
 ├── document_processor.py  # Azure Document Intelligence integration
 ├── visualization.py   # Image annotation and charts
-├── demo.py           # Setup testing script
+├── healthcheck.py           # Setup testing script
 ├── .env              # Environment variables (create from .env.example)
 ├── .env.example      # Environment variables template
 └── requirements.txt   # Python dependencies

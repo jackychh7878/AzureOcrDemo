@@ -4,8 +4,6 @@ Run this before using the main Streamlit app to verify your setup
 """
 
 import os
-from azure.ai.documentintelligence import DocumentIntelligenceClient
-from azure.core.credentials import AzureKeyCredential
 from config import DOCUMENT_MODELS, AZURE_DOC_INTEL_ENDPOINT, AZURE_DOC_INTEL_KEY
 
 
@@ -14,6 +12,10 @@ def test_connection(endpoint: str, key: str):
     print("🔄 Testing Azure Document Intelligence connection...")
     
     try:
+        # Import Azure modules only when needed
+        from azure.ai.documentintelligence import DocumentIntelligenceClient
+        from azure.core.credentials import AzureKeyCredential
+        
         client = DocumentIntelligenceClient(
             endpoint=endpoint,
             credential=AzureKeyCredential(key)
@@ -47,26 +49,27 @@ def check_dependencies():
     """Check if all required packages are installed"""
     print("📦 Checking dependencies...")
     
-    required_packages = [
-        'streamlit',
-                 'azure-ai-documentintelligence', 
-         'azure-core',
-         'pillow',
-         'opencv-python',
-         'pandas',
-         'plotly',
-         'python-dotenv'
-    ]
+    # Map PyPI package names to their actual import names
+    required_packages = {
+        'streamlit': 'streamlit',
+        'azure-ai-documentintelligence': 'azure.ai.documentintelligence', 
+        'azure-core': 'azure.core',
+        'pillow': 'PIL',
+        'opencv-python': 'cv2',
+        'pandas': 'pandas',
+        'plotly': 'plotly',
+        'python-dotenv': 'dotenv'
+    }
     
     missing_packages = []
     
-    for package in required_packages:
+    for package_name, import_name in required_packages.items():
         try:
-            __import__(package.replace('-', '_'))
-            print(f"✅ {package}")
+            __import__(import_name)
+            print(f"✅ {package_name}")
         except ImportError:
-            print(f"❌ {package} - NOT INSTALLED")
-            missing_packages.append(package)
+            print(f"❌ {package_name} - NOT INSTALLED")
+            missing_packages.append(package_name)
     
     if missing_packages:
         print(f"\n⚠️  Missing packages: {', '.join(missing_packages)}")

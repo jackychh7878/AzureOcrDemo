@@ -25,7 +25,7 @@ DEBUG_MODE=false
 
 ## 3. Test Setup (Optional)
 ```bash
-python demo.py
+python healthcheck.py
 ```
 
 ## 4. Run the Application
