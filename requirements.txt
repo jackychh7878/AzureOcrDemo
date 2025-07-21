@@ -1,0 +1,9 @@
+streamlit
+azure-ai-documentintelligence
+azure-core
+pillow
+opencv-python
+pandas
+numpy
+plotly
+python-dotenv
