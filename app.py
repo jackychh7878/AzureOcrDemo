@@ -151,95 +151,164 @@ def display_results(extracted_data, file_bytes):
     # Create visualizer
     visualizer = DocumentVisualizer()
     
+    # Get all fields for interaction
+    all_fields = [field["name"] for field in extracted_data.get("fields", [])]
+    
+    # Add field selector at the top
+    if all_fields:
+        st.subheader("🎯 Field Selector")
+        
+        col_select1, col_select2 = st.columns([3, 1])
+        with col_select1:
+            selected_fields = st.multiselect(
+                "Select fields to highlight on the document:",
+                options=all_fields,
+                default=all_fields,  # Show all by default
+                help="Select specific fields to highlight their locations on the document image"
+            )
+        
+        with col_select2:
+            highlight_mode = st.selectbox(
+                "Highlight Mode:",
+                options=["All Fields", "Selected Only", "None"],
+                index=0,
+                help="Choose how to display field annotations"
+            )
+        
+        # Adjust selected_fields based on mode
+        if highlight_mode == "All Fields":
+            fields_to_show = all_fields
+        elif highlight_mode == "Selected Only":
+            fields_to_show = selected_fields
+        else:
+            fields_to_show = []
+    else:
+        fields_to_show = []
+        selected_fields = []
+    
     # Create main layout columns
     col1, col2 = st.columns([1.2, 0.8])
     
     with col1:
         st.subheader("📄 Document with Annotations")
         
-        # Field filter
-        all_fields = [field["name"] for field in extracted_data.get("fields", [])]
-        if all_fields:
-            selected_fields = st.multiselect(
-                "Filter Fields to Display",
-                options=all_fields,
-                default=all_fields,  # Show all by default
-                help="Select which fields to highlight on the document"
-            )
-        else:
-            selected_fields = []
+        # Show annotation legend
+        if fields_to_show:
+            st.info(f"💡 Showing annotations for {len(fields_to_show)} field(s). Use the selector above to focus on specific fields.")
         
         # Draw annotations
-        annotated_image = visualizer.draw_annotations(file_bytes, extracted_data, selected_fields)
-        st.image(annotated_image, caption="Document with Extracted Fields", use_container_width=True)
+        annotated_image = visualizer.draw_annotations(file_bytes, extracted_data, fields_to_show)
+        st.image(annotated_image, caption="Document with Field Annotations", use_container_width=True)
         
         # Display legend
         st.markdown(visualizer.create_legend(), unsafe_allow_html=True)
     
     with col2:
-        st.subheader("📊 Extracted Data")
+        st.subheader("📊 Extracted Fields")
         
         # Display extracted fields in a format similar to the mockup
         fields = extracted_data.get("fields", [])
         
         if fields:
-            # Create a container for the fields list
-            st.markdown("### Fields")
-            
             # Sort fields by confidence (highest first)
             sorted_fields = sorted(fields, key=lambda x: x.get('confidence', 0), reverse=True)
             
+            # Create searchable/filterable view
+            search_term = st.text_input("🔍 Search fields:", placeholder="Type to filter fields...")
+            
+            # Filter fields based on search
+            if search_term:
+                filtered_fields = [f for f in sorted_fields if search_term.lower() in f.get("name", "").lower() or search_term.lower() in str(f.get("value", "")).lower()]
+            else:
+                filtered_fields = sorted_fields
+            
+            st.write(f"Showing {len(filtered_fields)} of {len(fields)} fields")
+            
             # Display each field
-            for field in sorted_fields:
+            for i, field in enumerate(filtered_fields):
                 field_name = field.get("name", "Unknown")
                 field_value = field.get("value", "")
                 confidence = field.get("confidence", 0.0)
                 
+                # Determine if this field is currently highlighted
+                is_highlighted = field_name in fields_to_show
+                highlight_status = "🟢 Highlighted" if is_highlighted else "⚫ Not shown"
+                
                 # Create a container for each field
                 with st.container():
-                    # Color coding based on confidence
+                    # Color coding based on confidence and highlight status
                     if confidence >= 0.8:
-                        confidence_color = "#00FF00"  # Green for high confidence
+                        confidence_color = "#00AA00"  # Green for high confidence
                         confidence_emoji = "🟢"
                     elif confidence >= 0.5:
-                        confidence_color = "#FFA500"  # Orange for medium confidence
+                        confidence_color = "#FF8800"  # Orange for medium confidence
                         confidence_emoji = "🟡"
                     else:
-                        confidence_color = "#FF0000"  # Red for low confidence
+                        confidence_color = "#DD0000"  # Red for low confidence
                         confidence_emoji = "🔴"
+                    
+                    # Add border color for highlighted fields
+                    border_color = "#0066CC" if is_highlighted else "#e0e0e0"
+                    border_width = "3px" if is_highlighted else "1px"
                     
                     # Display field info in a format similar to mockup
                     st.markdown(f"""
-                    <div style="border: 1px solid #e0e0e0; border-radius: 5px; padding: 10px; margin: 5px 0;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <strong style="color: #333;">{field_name}</strong><br>
-                                <span style="color: #666; font-size: 0.9em;">{field_value}</span>
+                    <div style="border: {border_width} solid {border_color}; border-radius: 8px; padding: 12px; margin: 8px 0; background-color: {'#f0f8ff' if is_highlighted else '#ffffff'};">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                            <div style="flex-grow: 1;">
+                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                                    <strong style="color: #333; font-size: 14px;">{field_name}</strong>
+                                    <span style="font-size: 11px; color: #666; background: #f5f5f5; padding: 2px 6px; border-radius: 10px;">{highlight_status}</span>
+                                </div>
+                                <div style="color: #555; font-size: 13px; margin-bottom: 4px; word-wrap: break-word;">
+                                    <strong>Value:</strong> {field_value}
+                                </div>
+                                <div style="color: #777; font-size: 11px;">
+                                    <strong>Location:</strong> {"On image" if field.get("polygon") else "Text only"}
+                                </div>
                             </div>
-                            <div style="text-align: right;">
-                                <span style="color: {confidence_color}; font-weight: bold;">{confidence_emoji} {confidence:.1%}</span>
+                            <div style="text-align: right; margin-left: 12px;">
+                                <div style="color: {confidence_color}; font-weight: bold; font-size: 14px;">
+                                    {confidence_emoji} {confidence:.1%}
+                                </div>
                             </div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
             
             # Summary statistics
-            st.markdown("### Summary")
+            st.markdown("---")
+            st.markdown("### 📈 Summary")
             total_fields = len(fields)
             high_conf_count = sum(1 for f in fields if f.get('confidence', 0) >= 0.8)
             medium_conf_count = sum(1 for f in fields if 0.5 <= f.get('confidence', 0) < 0.8)
             low_conf_count = sum(1 for f in fields if f.get('confidence', 0) < 0.5)
+            highlighted_count = len([f for f in fields if f.get("name") in fields_to_show])
             
             col_a, col_b = st.columns(2)
             with col_a:
                 st.metric("Total Fields", total_fields)
                 st.metric("🟢 High Confidence", f"{high_conf_count} ({high_conf_count/total_fields*100:.0f}%)" if total_fields > 0 else "0")
             with col_b:
+                st.metric("🎯 Highlighted", highlighted_count)
                 st.metric("🟡 Medium Confidence", f"{medium_conf_count} ({medium_conf_count/total_fields*100:.0f}%)" if total_fields > 0 else "0")
-                st.metric("🔴 Low Confidence", f"{low_conf_count} ({low_conf_count/total_fields*100:.0f}%)" if total_fields > 0 else "0")
+            
+            if low_conf_count > 0:
+                st.metric("🔴 Low Confidence", f"{low_conf_count} ({low_conf_count/total_fields*100:.0f}%)")
         
         else:
             st.info("No fields extracted from the document.")
+            
+    # Instructions for users
+    st.markdown("---")
+    st.markdown("""
+    ### 💡 How to use:
+    1. **Field Selector**: Use the dropdown above to choose which fields to highlight on the document
+    2. **Right Panel**: Shows all extracted fields with confidence scores and highlight status  
+    3. **Left Panel**: Shows the document with colored bounding boxes around selected fields
+    4. **Color Coding**: 🟢 High confidence (≥80%) | 🟡 Medium (50-79%) | 🔴 Low (<50%)
+    5. **Search**: Use the search box to quickly find specific fields or values
+    """)
 
 
 def display_detailed_results(extracted_data):

@@ -41,118 +41,237 @@ class DocumentVisualizer:
         
         # Get image dimensions
         img_width, img_height = image.size
+        print(f"DEBUG: Image dimensions: {img_width} x {img_height}")
         
         # Get page dimensions from extracted data
         page_data = extracted_data.get("pages", [])
-        if page_data:
-            doc_width = page_data[0].get("width", img_width)
-            doc_height = page_data[0].get("height", img_height)
+        if page_data and len(page_data) > 0:
+            page = page_data[0]
+            doc_width = page.get("width", img_width)
+            doc_height = page.get("height", img_height)
+            unit = page.get("unit", "pixel")
+            print(f"DEBUG: Document dimensions: {doc_width} x {doc_height} ({unit})")
+            
+            # Handle different units - Azure typically uses inches or pixels
+            if unit == "inch":
+                # For Azure Document Intelligence, coordinates are usually in inches
+                # Don't convert - use direct mapping
+                doc_width_px = doc_width
+                doc_height_px = doc_height
+            else:
+                # Assume already in correct coordinate system
+                doc_width_px = doc_width
+                doc_height_px = doc_height
         else:
-            doc_width, doc_height = img_width, img_height
+            doc_width_px, doc_height_px = img_width, img_height
         
-        # Calculate scaling factors
-        scale_x = img_width / doc_width
-        scale_y = img_height / doc_height
+        # Calculate scaling factors - for Azure, often we need direct mapping
+        scale_x = img_width / doc_width_px if doc_width_px > 0 else 1.0
+        scale_y = img_height / doc_height_px if doc_height_px > 0 else 1.0
+        print(f"DEBUG: Scale factors: x={scale_x:.3f}, y={scale_y:.3f}")
         
         # Draw field annotations
         fields = extracted_data.get("fields", [])
+        print(f"DEBUG: Processing {len(fields)} total fields")
+        
+        annotations_drawn = 0
         for i, field in enumerate(fields):
             if selected_fields and field["name"] not in selected_fields:
                 continue
                 
-            if field.get("polygon"):
-                self._draw_field_annotation(
-                    draw, field, scale_x, scale_y, i
+            field_polygon = field.get("polygon", [])
+            if field_polygon:
+                print(f"DEBUG: Drawing field '{field['name']}' with {len(field_polygon)} points")
+                print(f"DEBUG: First few points: {field_polygon[:2]}")
+                success = self._draw_field_annotation(
+                    draw, field, scale_x, scale_y, i, img_width, img_height
                 )
+                if success:
+                    annotations_drawn += 1
+            else:
+                print(f"DEBUG: No polygon for field '{field['name']}'")
         
-        # Draw table annotations
-        tables = extracted_data.get("tables", [])
-        for table in tables:
-            if table.get("polygon"):
-                self._draw_table_annotation(
-                    draw, table, scale_x, scale_y
-                )
+        print(f"DEBUG: Successfully drew {annotations_drawn} annotations")
+        
+        # Draw table annotations if no specific fields selected
+        if not selected_fields:
+            tables = extracted_data.get("tables", [])
+            for table in tables:
+                if table.get("polygon"):
+                    self._draw_table_annotation(
+                        draw, table, scale_x, scale_y
+                    )
         
         return annotated_image
     
     def _draw_field_annotation(self, draw: ImageDraw.Draw, field: Dict[str, Any], 
-                              scale_x: float, scale_y: float, index: int):
+                              scale_x: float, scale_y: float, index: int, img_width: int, img_height: int) -> bool:
         """Draw annotation for a single field"""
         polygon = field["polygon"]
         confidence = field.get("confidence", 0.0)
         field_name = field.get("name", "Unknown")
+        field_value = str(field.get("value", ""))[:50]  # Truncate long values
         
-        if not polygon:
-            return
+        if not polygon or len(polygon) < 2:
+            return False # Indicate failure
         
-        # Scale polygon coordinates
-        scaled_polygon = []
-        for point in polygon:
-            scaled_x = point[0] * scale_x
-            scaled_y = point[1] * scale_y
-            scaled_polygon.append((scaled_x, scaled_y))
+        print(f"DEBUG: Drawing '{field_name}' with confidence {confidence:.2f}")
+        print(f"DEBUG: Raw polygon: {polygon}")
+        
+        # Analyze the coordinate format and convert appropriately
+        scaled_polygon = self._convert_coordinates_intelligently(polygon, img_width, img_height, scale_x, scale_y)
         
         if len(scaled_polygon) < 2:
-            return
+            print(f"DEBUG: Not enough valid points for field '{field_name}' - only got {len(scaled_polygon)}")
+            return False # Indicate failure
+        
+        print(f"DEBUG: Final scaled polygon: {scaled_polygon}")
         
         # Get color based on confidence
         color = self._get_confidence_color(confidence)
+        print(f"DEBUG: Using color: {color}")
         
-        # Calculate bounding box for the polygon
-        if scaled_polygon:
-            x_coords = [p[0] for p in scaled_polygon]
-            y_coords = [p[1] for p in scaled_polygon]
-            min_x, max_x = min(x_coords), max(x_coords)
-            min_y, max_y = min(y_coords), max(y_coords)
+        # Calculate bounding rectangle from polygon
+        x_coords = [p[0] for p in scaled_polygon]
+        y_coords = [p[1] for p in scaled_polygon]
+        min_x, max_x = min(x_coords), max(x_coords)
+        min_y, max_y = min(y_coords), max(y_coords)
+        
+        # Ensure we have a visible area (minimum 15x15 pixels)
+        if abs(max_x - min_x) < 15:
+            center_x = (min_x + max_x) / 2
+            min_x = center_x - 7
+            max_x = center_x + 7
+        
+        if abs(max_y - min_y) < 15:
+            center_y = (min_y + max_y) / 2
+            min_y = center_y - 7
+            max_y = center_y + 7
+        
+        print(f"DEBUG: Final bounding box: ({min_x:.1f}, {min_y:.1f}) to ({max_x:.1f}, {max_y:.1f})")
+        
+        # Draw visible bounding rectangle
+        try:
+            for thickness in range(3):  # Reduced from 8 to 3
+                rect = [min_x - thickness, min_y - thickness, max_x + thickness, max_y + thickness]
+                draw.rectangle(rect, outline=color, width=1)
             
-            # Draw filled rectangle with transparency effect (simulate with outline)
-            # Draw multiple lines to create a thick border effect
-            for i in range(3):
-                if len(scaled_polygon) >= 3:
-                    # Draw polygon outline
-                    draw.polygon(scaled_polygon, outline=color, width=2+i)
-                else:
-                    # For lines, draw rectangle
-                    draw.rectangle([min_x-i, min_y-i, max_x+i, max_y+i], outline=color, width=2)
-            
-            # Create label text
-            label_text = f"{field_name}"
-            confidence_text = f"{confidence:.1%}"
-            
-            # Calculate label position (above the field)
-            label_x = min_x
-            label_y = min_y - 30
-            
-            # Ensure label is within image bounds
-            if label_y < 0:
-                label_y = max_y + 5
-            
-            # Draw label background rectangle
+            print(f"DEBUG: Successfully drew rectangle for '{field_name}'")
+        except Exception as e:
+            print(f"DEBUG: Error drawing rectangle: {e}")
+            return False
+        
+        # Draw the polygon outline if we have enough points
+        if len(scaled_polygon) > 2:
             try:
-                # Get text dimensions
-                bbox = draw.textbbox((0, 0), label_text)
-                text_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
-                
-                conf_bbox = draw.textbbox((0, 0), confidence_text)
-                conf_width = conf_bbox[2] - conf_bbox[0]
-                
-                total_width = max(text_width, conf_width) + 10
-                total_height = text_height * 2 + 10
-                
-                # Draw background rectangle
-                bg_rect = [label_x, label_y, label_x + total_width, label_y + total_height]
-                draw.rectangle(bg_rect, fill=color, outline=color)
-                
-                # Draw field name
-                draw.text((label_x + 5, label_y + 2), label_text, fill="white")
-                
-                # Draw confidence
-                draw.text((label_x + 5, label_y + text_height + 4), confidence_text, fill="white")
-                
+                draw.polygon(scaled_polygon, outline=color, width=2)  # Reduced from 5 to 2
+                print(f"DEBUG: Successfully drew polygon for '{field_name}'")
             except Exception as e:
-                # Fallback to simple text if bbox calculation fails
-                draw.text((label_x, label_y), f"{label_text} ({confidence_text})", fill=color)
+                print(f"DEBUG: Error drawing polygon: {e}")
+                # Continue with just the rectangle
+        
+        # Create and position label
+        label_text = field_name
+        confidence_text = f"{confidence:.1%}"
+        
+        # Position label
+        label_x = max(0, min_x)
+        label_y = max(0, min_y - 30)
+        
+        # If label would be off-screen, place it below
+        if label_y < 0:
+            label_y = min(img_height - 30, max_y + 5)
+        
+        # Draw simple but visible label
+        try:
+            # Draw background rectangle for label
+            label_bg = [label_x, label_y, label_x + 200, label_y + 25]
+            draw.rectangle(label_bg, fill=color, outline=color)
+            
+            # Draw text
+            label_full = f"{field_name} ({confidence_text})"
+            draw.text((label_x + 5, label_y + 5), label_full, fill="white")
+            print(f"DEBUG: Successfully drew label for '{field_name}'")
+            
+        except Exception as e:
+            print(f"DEBUG: Error drawing label: {e}")
+            # Try simple text without background
+            try:
+                draw.text((label_x, label_y), field_name, fill=color)
+            except:
+                pass  # Give up on labeling if everything fails
+        
+        return True # Indicate success
+    
+    def _convert_coordinates_intelligently(self, polygon, img_width: int, img_height: int, scale_x: float, scale_y: float):
+        """Intelligently convert polygon coordinates based on their format"""
+        scaled_polygon = []
+        
+        # First, analyze what kind of coordinates we have
+        sample_points = polygon[:3]  # Look at first few points
+        max_x = max(p[0] for p in sample_points) if sample_points else 0
+        max_y = max(p[1] for p in sample_points) if sample_points else 0
+        min_x = min(p[0] for p in sample_points) if sample_points else 0
+        min_y = min(p[1] for p in sample_points) if sample_points else 0
+        
+        print(f"DEBUG: Coordinate analysis - X range: {min_x:.3f} to {max_x:.3f}, Y range: {min_y:.3f} to {max_y:.3f}")
+        print(f"DEBUG: Image size: {img_width} x {img_height}")
+        print(f"DEBUG: Scale factors: {scale_x:.3f} x {scale_y:.3f}")
+        
+        # Determine coordinate format based on Azure Document Intelligence response structure
+        coordinate_format = "unknown"
+        
+        # Azure typically gives pixel coordinates that match the page dimensions
+        if max_x > 1 and max_y > 1:
+            if max_x <= img_width * 2 and max_y <= img_height * 2:
+                # Coordinates are likely in document pixel space, need scaling
+                coordinate_format = "document_pixels"
+            elif max_x <= 1.0 and max_y <= 1.0 and min_x >= 0.0 and min_y >= 0.0:
+                coordinate_format = "normalized"  # 0-1 range
+            else:
+                coordinate_format = "document_pixels"  # Default for Azure
+        elif max_x <= 1.0 and max_y <= 1.0 and min_x >= 0.0 and min_y >= 0.0:
+            coordinate_format = "normalized"  # 0-1 range
+        else:
+            coordinate_format = "document_pixels"  # Default assumption
+        
+        print(f"DEBUG: Detected coordinate format: {coordinate_format}")
+        
+        for point in polygon:
+            try:
+                if len(point) >= 2:
+                    x, y = float(point[0]), float(point[1])
+                    
+                    if coordinate_format == "normalized":
+                        # Coordinates are 0-1, scale to image size
+                        scaled_x = x * img_width
+                        scaled_y = y * img_height
+                        print(f"DEBUG: Normalized: ({x:.3f}, {y:.3f}) -> ({scaled_x:.1f}, {scaled_y:.1f})")
+                        
+                    elif coordinate_format == "document_pixels":
+                        # Coordinates are in document pixel space, scale to image pixels
+                        # Use the scale factors calculated from page dimensions
+                        scaled_x = x * scale_x
+                        scaled_y = y * scale_y
+                        print(f"DEBUG: Document pixels: ({x:.1f}, {y:.1f}) -> ({scaled_x:.1f}, {scaled_y:.1f})")
+                        
+                    else:
+                        # Fallback - use scale factors
+                        scaled_x = x * scale_x
+                        scaled_y = y * scale_y
+                        print(f"DEBUG: Fallback: ({x:.3f}, {y:.3f}) -> ({scaled_x:.1f}, {scaled_y:.1f})")
+                    
+                    # Clamp coordinates to image bounds
+                    scaled_x = max(0, min(img_width - 1, scaled_x))
+                    scaled_y = max(0, min(img_height - 1, scaled_y))
+                    
+                    scaled_polygon.append((scaled_x, scaled_y))
+                    
+            except (ValueError, TypeError) as e:
+                print(f"DEBUG: Error converting point {point}: {e}")
+                continue
+        
+        return scaled_polygon
     
     def _draw_table_annotation(self, draw: ImageDraw.Draw, table: Dict[str, Any], 
                               scale_x: float, scale_y: float):

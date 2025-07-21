@@ -215,8 +215,21 @@ class DocumentProcessor:
         
         try:
             coords = []
-            # Handle different polygon formats
-            if hasattr(polygon, '__iter__'):
+            
+            # Handle Azure Document Intelligence polygon format
+            if isinstance(polygon, (list, tuple)):
+                # Check if it's a flat array [x1, y1, x2, y2, ...]
+                if len(polygon) >= 4 and all(isinstance(x, (int, float)) for x in polygon):
+                    # Convert flat array to coordinate pairs
+                    for i in range(0, len(polygon), 2):
+                        if i + 1 < len(polygon):
+                            x = float(polygon[i])
+                            y = float(polygon[i + 1])
+                            coords.append((x, y))
+                    print(f"DEBUG: Converted flat polygon {polygon} to {coords}")
+                    return coords
+                
+                # Handle array of point objects or tuples
                 for point in polygon:
                     if hasattr(point, 'x') and hasattr(point, 'y'):
                         # Azure Document Intelligence Point object
@@ -233,10 +246,12 @@ class DocumentProcessor:
             
             # Validate that we have at least 2 points for a valid shape
             if len(coords) >= 2:
+                print(f"DEBUG: Successfully converted polygon to {len(coords)} points")
                 return coords
                 
         except (AttributeError, ValueError, TypeError, IndexError) as e:
             print(f"Error converting polygon: {e}")
+            print(f"Polygon data: {polygon}")
             pass
         
         return []
